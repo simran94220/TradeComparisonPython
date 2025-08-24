@@ -144,254 +144,150 @@ if __name__ == "__main__":
     run_remote_command(host, port, username, password, command)
 
 
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-Activate.ps1
+RunEODBatch.py FXO HBAP 18-08-2025             create a folder named files under project and place file names FXO_HBAP containing all list of commands---------------------------------------------------------------
+# Run EOD batch method with 3 parameters 1. asset class 2. region 3. date
 
-<#
-.Synopsis
-Activate a Python virtual environment for the current PowerShell session.
+import sys
+import datetime as dt
+#import subprocess
+#import paramiko
+import time
+import os
 
-.Description
-Pushes the python executable for a virtual environment to the front of the
-$Env:PATH environment variable and sets the prompt to signify that you are
-in a Python virtual environment. Makes use of the command line switches as
-well as the `pyvenv.cfg` file values present in the virtual environment.
 
-.Parameter VenvDir
-Path to the directory that contains the virtual environment to activate. The
-default value for this is the parent of the directory that the Activate.ps1
-script is located within.
+# --- Date handling ---
+def parse_process_date(date_text: str) -> str:
+    """
+    Accepts either 'YYYY-MM-DD' or 'dd-mm-YYYY' (also tolerates '/' separators).
+    Returns date string formatted as 'dd-mm-YYYY'.
+    """
+    date_text = date_text.strip()
+    tried = []
+    for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%Y/%m/%d", "%d/%m/%Y"):
+        try:
+            d = dt.datetime.strptime(date_text, fmt).date()
+            return d.strftime("%d-%m-%Y")  # final required format
+        except ValueError:
+            tried.append(fmt)
+            continue
+    raise ValueError(
+        f"Incorrect date format. Try one of: {', '.join(tried)}. "
+        "Example: 2025-08-24 or 24-08-2025"
+    )
+##replace placeholder {{process_date}} in text file function
+def replace_process_date(file_path, process_date):
+    """
+    Replace placeholder {{PROCESS_DATE}} in the text file with actual process_date.
+    Returns the updated list of commands.
+    """
+    with open(file_path, "r") as file:
+        commands = file.readlines()
 
-.Parameter Prompt
-The prompt prefix to display when this virtual environment is activated. By
-default, this prompt is the name of the virtual environment folder (VenvDir)
-surrounded by parentheses and followed by a single space (ie. '(.venv) ').
+    # Replace placeholder
+    updated_commands = [cmd.replace("{{PROCESS_DATE}}", str(process_date)) for cmd in commands]
 
-.Example
-Activate.ps1
-Activates the Python virtual environment that contains the Activate.ps1 script.
+    # Optionally overwrite the file (or keep as temp)
+    with open(file_path, "w") as file:
+        file.writelines(updated_commands)
 
-.Example
-Activate.ps1 -Verbose
-Activates the Python virtual environment that contains the Activate.ps1 script,
-and shows extra information about the activation as it executes.
+    return updated_commands
 
-.Example
-Activate.ps1 -VenvDir C:\Users\MyUser\Common\.venv
-Activates the Python virtual environment located in the specified location.
 
-.Example
-Activate.ps1 -Prompt "MyPython"
-Activates the Python virtual environment that contains the Activate.ps1 script,
-and prefixes the current prompt with the specified string (surrounded in
-parentheses) while the virtual environment is active.
+def get_command_file(asset_class, region, process_date):
+    """
+    Chose the right command file based on asset class and region.
+    
+    """
+    print(f"\n🚀 Starting EOD Batch Execution...")
+    print(f"Asset Class: {asset_class}")
+    print(f"Region: {region}")
+    print(f"Date: {process_date}")
 
-.Notes
-On Windows, it may be required to enable this Activate.ps1 script by setting the
-execution policy for the user. You can do this by issuing the following PowerShell
-command:
-
-PS C:\> Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
-
-For more information on Execution Policies: 
-https://go.microsoft.com/fwlink/?LinkID=135170
-
-#>
-Param(
-    [Parameter(Mandatory = $false)]
-    [String]
-    $VenvDir,
-    [Parameter(Mandatory = $false)]
-    [String]
-    $Prompt
-)
-
-<# Function declarations --------------------------------------------------- #>
-
-<#
-.Synopsis
-Remove all shell session elements added by the Activate script, including the
-addition of the virtual environment's Python executable from the beginning of
-the PATH variable.
-
-.Parameter NonDestructive
-If present, do not remove this function from the global namespace for the
-session.
-
-#>
-function global:deactivate ([switch]$NonDestructive) {
-    # Revert to original values
-
-    # The prior prompt:
-    if (Test-Path -Path Function:_OLD_VIRTUAL_PROMPT) {
-        Copy-Item -Path Function:_OLD_VIRTUAL_PROMPT -Destination Function:prompt
-        Remove-Item -Path Function:_OLD_VIRTUAL_PROMPT
+    # Example: Map jobs based on asset class & region will pick up file from files folder
+    job_map = {
+        ("FXO", "HBAP"): "FXO_HBAP.txt",
+        ("FXO", "HBEU"): "FXO_HBEU.txt",
+        ("FXO", "APAC"): "FXO_APAC.txt",
     }
+    #filename is from files folder where job scripts are stored
+    file_name = job_map.get((asset_class, region))
+    if not file_name:
+        print("⚠️ No batch defined for this combination.")
+        return
+    
+    # Path to commands file
+    file_path = os.path.join("files", file_name)
+    return file_path
 
-    # The prior PYTHONHOME:
-    if (Test-Path -Path Env:_OLD_VIRTUAL_PYTHONHOME) {
-        Copy-Item -Path Env:_OLD_VIRTUAL_PYTHONHOME -Destination Env:PYTHONHOME
-        Remove-Item -Path Env:_OLD_VIRTUAL_PYTHONHOME
-    }
+   # # Run external script (example: shell script / SQL job)
+    #try:
+     #   subprocess.run(["bash", job, str(process_date)], check=True)
+      #  print("✅ Batch executed successfully.")
+    #except subprocess.CalledProcessError as e:
+     #   print(f"❌ Error running batch: {e}")
 
-    # The prior PATH:
-    if (Test-Path -Path Env:_OLD_VIRTUAL_PATH) {
-        Copy-Item -Path Env:_OLD_VIRTUAL_PATH -Destination Env:PATH
-        Remove-Item -Path Env:_OLD_VIRTUAL_PATH
-    }
+def execute_commands_over_ssh(host, username, password, commands, wait_time=5):
+    """
+    Connect to SSH and execute commands sequentially.
+    """
+    print(f"🔑 Connecting to {host}...")
+    #ssh = paramiko.SSHClient()
+    #ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
-    # Just remove the VIRTUAL_ENV altogether:
-    if (Test-Path -Path Env:VIRTUAL_ENV) {
-        Remove-Item -Path env:VIRTUAL_ENV
-    }
+    #ssh.connect(host, username=username, password=password)
+    print("✅ Connected.")
 
-    # Just remove VIRTUAL_ENV_PROMPT altogether.
-    if (Test-Path -Path Env:VIRTUAL_ENV_PROMPT) {
-        Remove-Item -Path env:VIRTUAL_ENV_PROMPT
-    }
+    for i, cmd in enumerate(commands, start=1):
+        cmd = cmd.strip()
+        if not cmd:
+            continue
 
-    # Just remove the _PYTHON_VENV_PROMPT_PREFIX altogether:
-    if (Get-Variable -Name "_PYTHON_VENV_PROMPT_PREFIX" -ErrorAction SilentlyContinue) {
-        Remove-Variable -Name _PYTHON_VENV_PROMPT_PREFIX -Scope Global -Force
-    }
+        print(f"\n➡️ Executing command {i}: {cmd}")
+       # stdin, stdout, stderr = ssh.exec_command(cmd)
 
-    # Leave deactivate function in the global namespace if requested:
-    if (-not $NonDestructive) {
-        Remove-Item -Path function:deactivate
-    }
-}
+        # Print command output
+      #  output = stdout.read().decode()
+       # error = stderr.read().decode()
+        #if output:
+         #   print(f"--- Output ---\n{output}")
+        #if error:
+         #   print(f"--- Error ---\n{error}")
 
-<#
-.Description
-Get-PyVenvConfig parses the values from the pyvenv.cfg file located in the
-given folder, and returns them in a map.
+        # Wait before next command
+        time.sleep(wait_time)
 
-For each line in the pyvenv.cfg file, if that line can be parsed into exactly
-two strings separated by `=` (with any amount of whitespace surrounding the =)
-then it is considered a `key = value` line. The left hand string is the key,
-the right hand is the value.
-
-If the value starts with a `'` or a `"` then the first and last character is
-stripped from the value before being captured.
-
-.Parameter ConfigDir
-Path to the directory that contains the `pyvenv.cfg` file.
-#>
-function Get-PyVenvConfig(
-    [String]
-    $ConfigDir
-) {
-    Write-Verbose "Given ConfigDir=$ConfigDir, obtain values in pyvenv.cfg"
-
-    # Ensure the file exists, and issue a warning if it doesn't (but still allow the function to continue).
-    $pyvenvConfigPath = Join-Path -Resolve -Path $ConfigDir -ChildPath 'pyvenv.cfg' -ErrorAction Continue
-
-    # An empty map will be returned if no config file is found.
-    $pyvenvConfig = @{ }
-
-    if ($pyvenvConfigPath) {
-
-        Write-Verbose "File exists, parse `key = value` lines"
-        $pyvenvConfigContent = Get-Content -Path $pyvenvConfigPath
-
-        $pyvenvConfigContent | ForEach-Object {
-            $keyval = $PSItem -split "\s*=\s*", 2
-            if ($keyval[0] -and $keyval[1]) {
-                $val = $keyval[1]
-
-                # Remove extraneous quotations around a string value.
-                if ("'""".Contains($val.Substring(0, 1))) {
-                    $val = $val.Substring(1, $val.Length - 2)
-                }
-
-                $pyvenvConfig[$keyval[0]] = $val
-                Write-Verbose "Adding Key: '$($keyval[0])'='$val'"
-            }
-        }
-    }
-    return $pyvenvConfig
-}
+    #ssh.close()
+    print("🔒 SSH connection closed.")
 
 
-<# Begin Activate script --------------------------------------------------- #>
+def main():
+    if len(sys.argv) != 4:
+        print("Usage: python RunEODBatch.py <AssetClass> <Region> <DD-MM-YYYY>")
+        sys.exit(1)
 
-# Determine the containing directory of this script
-$VenvExecPath = Split-Path -Parent $MyInvocation.MyCommand.Definition
-$VenvExecDir = Get-Item -Path $VenvExecPath
+    asset_class = sys.argv[1]
+    region = sys.argv[2]
+    process_date_str = parse_process_date(sys.argv[3])  # -> dd-mm-YYYY
+    filePath=get_command_file(asset_class, region, process_date_str)
+    if not filePath:
+        sys.exit(1)
+#pass the process date to replace placeholder in the file of  commands
+    listOfCommands = replace_process_date(filePath, process_date_str)
+    print(f"Commands to execute:\n{''.join(listOfCommands)}")
+    if not listOfCommands:
+        print("No commands to execute.")
+        sys.exit(1)
 
-Write-Verbose "Activation script is located in path: '$VenvExecPath'"
-Write-Verbose "VenvExecDir Fullname: '$($VenvExecDir.FullName)"
-Write-Verbose "VenvExecDir Name: '$($VenvExecDir.Name)"
+    # SSH connection details (example values)
+     # Step 2: SSH Details (replace with env vars / secrets in production!)
+    host = "unix_server_ip_or_hostname"
+    username = "your_username"
+    password = "your_password"
 
-# Set values required in priority: CmdLine, ConfigFile, Default
-# First, get the location of the virtual environment, it might not be
-# VenvExecDir if specified on the command line.
-if ($VenvDir) {
-    Write-Verbose "VenvDir given as parameter, using '$VenvDir' to determine values"
-}
-else {
-    Write-Verbose "VenvDir not given as a parameter, using parent directory name as VenvDir."
-    $VenvDir = $VenvExecDir.Parent.FullName.TrimEnd("\\/")
-    Write-Verbose "VenvDir=$VenvDir"
-}
+    #  Execute commands sequentially
+    execute_commands_over_ssh(host, username, password, listOfCommands, wait_time=10)
 
-# Next, read the `pyvenv.cfg` file to determine any required value such
-# as `prompt`.
-$pyvenvCfg = Get-PyVenvConfig -ConfigDir $VenvDir
-
-# Next, set the prompt from the command line, or the config file, or
-# just use the name of the virtual environment folder.
-if ($Prompt) {
-    Write-Verbose "Prompt specified as argument, using '$Prompt'"
-}
-else {
-    Write-Verbose "Prompt not specified as argument to script, checking pyvenv.cfg value"
-    if ($pyvenvCfg -and $pyvenvCfg['prompt']) {
-        Write-Verbose "  Setting based on value in pyvenv.cfg='$($pyvenvCfg['prompt'])'"
-        $Prompt = $pyvenvCfg['prompt'];
-    }
-    else {
-        Write-Verbose "  Setting prompt based on parent's directory's name. (Is the directory name passed to venv module when creating the virtual environment)"
-        Write-Verbose "  Got leaf-name of $VenvDir='$(Split-Path -Path $venvDir -Leaf)'"
-        $Prompt = Split-Path -Path $venvDir -Leaf
-    }
-}
-
-Write-Verbose "Prompt = '$Prompt'"
-Write-Verbose "VenvDir='$VenvDir'"
-
-# Deactivate any currently active virtual environment, but leave the
-# deactivate function in place.
-deactivate -nondestructive
-
-# Now set the environment variable VIRTUAL_ENV, used by many tools to determine
-# that there is an activated venv.
-$env:VIRTUAL_ENV = $VenvDir
-
-$env:VIRTUAL_ENV_PROMPT = $Prompt
-
-if (-not $Env:VIRTUAL_ENV_DISABLE_PROMPT) {
-
-    Write-Verbose "Setting prompt to '$Prompt'"
-
-    # Set the prompt to include the env name
-    # Make sure _OLD_VIRTUAL_PROMPT is global
-    function global:_OLD_VIRTUAL_PROMPT { "" }
-    Copy-Item -Path function:prompt -Destination function:_OLD_VIRTUAL_PROMPT
-    New-Variable -Name _PYTHON_VENV_PROMPT_PREFIX -Description "Python virtual environment prompt prefix" -Scope Global -Option ReadOnly -Visibility Public -Value $Prompt
-
-    function global:prompt {
-        Write-Host -NoNewline -ForegroundColor Green "($_PYTHON_VENV_PROMPT_PREFIX) "
-        _OLD_VIRTUAL_PROMPT
-    }
-}
-
-# Clear PYTHONHOME
-if (Test-Path -Path Env:PYTHONHOME) {
-    Copy-Item -Path Env:PYTHONHOME -Destination Env:_OLD_VIRTUAL_PYTHONHOME
-    Remove-Item -Path Env:PYTHONHOME
-}
-
-# Add the venv to the PATH
-Copy-Item -Path Env:PATH -Destination Env:_OLD_VIRTUAL_PATH
-$Env:PATH = "$VenvExecDir$([System.IO.Path]::PathSeparator)$Env:PATH"
+if __name__ == "__main__":
+    main()
